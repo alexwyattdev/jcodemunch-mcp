@@ -80,6 +80,8 @@ LANGUAGE_EXTENSIONS = {
     ".t": "perl",
     ".gd": "gdscript",
     ".blade.php": "blade",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
 }
 
 
@@ -615,6 +617,31 @@ GDSCRIPT_SPEC = LanguageSpec(
 )
 
 
+# Kotlin specification
+# NOTE: The fwcd/tree-sitter-kotlin grammar uses positional children throughout —
+# there are no named fields for name, parameters, return type, or body.
+# Name and body extraction are handled by Kotlin-specific paths in extractor.py.
+# Annotations live inside a 'modifiers' child node rather than as preceding siblings.
+KOTLIN_SPEC = LanguageSpec(
+    ts_language="kotlin",
+    symbol_node_types={
+        "function_declaration": "function",
+        "class_declaration": "class",    # covers class, abstract class, data class, sealed class, interface, value class, fun interface
+        "object_declaration": "class",   # singleton objects, data objects
+        "companion_object": "class",     # companion objects (anonymous → "Companion", named → their name)
+        "type_alias": "type",
+    },
+    name_fields={},        # handled by _extract_name Kotlin path (positional children)
+    param_fields={},       # signature built from source range up to function_body
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type="annotation",   # used by _extract_decorators Kotlin path
+    container_node_types=["class_declaration", "object_declaration", "companion_object"],
+    constant_patterns=["property_declaration"],
+    type_patterns=["type_alias"],
+)
+
+
 # Blade (Laravel) specification
 # NOTE: No tree-sitter grammar is available for Blade templates.
 # Symbol extraction is performed by _parse_blade_symbols() in extractor.py
@@ -654,6 +681,7 @@ LANGUAGE_REGISTRY = {
     "perl": PERL_SPEC,
     "gdscript": GDSCRIPT_SPEC,
     "blade": BLADE_SPEC,
+    "kotlin": KOTLIN_SPEC,
 }
 
 logger = logging.getLogger(__name__)

@@ -199,8 +199,9 @@ def _walk_tree(
         and node.parent.parent is not None
         and node.parent.parent.type in ("companion_object", "object_declaration")
     )
-    # For Swift, also extract property_declaration inside class_body or enum_class_body
-    # (static let constants defined on types).
+    # For Swift, also extract property_declaration inside class_body or enum_class_body.
+    # This covers both `static let` and plain `let` constants defined in type bodies;
+    # the UPPER_CASE/PascalCase filter in _extract_constant narrows what actually gets indexed.
     _in_swift_type_scope = (
         language == "swift"
         and node.parent is not None
@@ -266,6 +267,16 @@ def _extract_symbol(
             kind = "method" if kind == "function" else kind
         else:
             qualified_name = name
+
+    # Swift extensions: keep name as the extended type (so methods qualify as
+    # Base.method) but suffix qualified_name with the start line so the extension
+    # symbol itself gets a unique ID that won't collide with `class Base {}` or
+    # other `extension Base {}` blocks in the same file.
+    if spec.ts_language == "swift" and node.type == "class_declaration" and not parent_symbol:
+        for child in node.children:
+            if not child.is_named and source_bytes[child.start_byte:child.end_byte] == b"extension":
+                qualified_name = f"{qualified_name}+extension:{node.start_point[0] + 1}"
+                break
 
     signature_node = node
     if language == "cpp":
@@ -1026,7 +1037,7 @@ def _extract_constant(
                 for kw in child.children:
                     if source_bytes[kw.start_byte:kw.end_byte] == b"let":
                         is_let = True
-                    break
+                        break
                 break
         if not is_let:
             return None

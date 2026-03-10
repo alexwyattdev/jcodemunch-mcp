@@ -63,7 +63,7 @@ def test_enum_indexed():
     assert "AEnum" in symbols_by_kind(TYPE_DECLARATIONS, "class")
 
 
-def test_protocol_indexed():
+def test_protocol_declaration_indexed():
     assert "AProtocol" in symbols_by_kind(TYPE_DECLARATIONS, "type")
 
 

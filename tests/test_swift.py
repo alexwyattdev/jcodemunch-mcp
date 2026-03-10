@@ -160,7 +160,7 @@ def test_actor_methods_indexed():
 FUNCTIONS = """\
 func plain(x: Int) -> Int { x }
 func withLabel(for value: String) -> Bool { false }
-async func asyncFetch(url: String) async throws -> Data { Data() }
+func asyncFetch(url: String) async throws -> Data { Data() }
 func generic<T: Comparable>(_ a: T, _ b: T) -> T { a }
 """
 

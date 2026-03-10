@@ -199,7 +199,16 @@ def _walk_tree(
         and node.parent.parent is not None
         and node.parent.parent.type in ("companion_object", "object_declaration")
     )
-    if node.type in spec.constant_patterns and (parent_symbol is None or _in_kotlin_static_scope):
+    # For Swift, also extract property_declaration inside class_body or enum_class_body
+    # (static let constants defined on types).
+    _in_swift_type_scope = (
+        language == "swift"
+        and node.parent is not None
+        and node.parent.type in ("class_body", "enum_class_body")
+    )
+    if node.type in spec.constant_patterns and (
+        parent_symbol is None or _in_kotlin_static_scope or _in_swift_type_scope
+    ):
         const_symbol = _extract_constant(node, spec, source_bytes, filename, language)
         if const_symbol:
             symbols.append(const_symbol)
@@ -372,6 +381,27 @@ def _extract_name(node, spec: LanguageSpec, source_bytes: bytes) -> Optional[str
                     return source_bytes[name_node.start_byte:name_node.end_byte].decode("utf-8")
         return None
 
+    # Swift: init/deinit/subscript use fixed names; extension name is the extended type
+    if spec.ts_language == "swift":
+        if node.type == "init_declaration":
+            return "init"
+        if node.type == "deinit_declaration":
+            return "deinit"
+        if node.type == "subscript_declaration":
+            return "subscript"
+        if node.type == "class_declaration":
+            # Detect extension: look for 'extension' keyword among unnamed children
+            for child in node.children:
+                if not child.is_named and source_bytes[child.start_byte:child.end_byte] == b"extension":
+                    # Extended type name lives in user_type child
+                    for c in node.children:
+                        if c.type == "user_type":
+                            return source_bytes[c.start_byte:c.end_byte].decode("utf-8")
+                    return None
+            # class / struct / enum / actor: fall through to name_fields lookup
+        # All other Swift nodes (function_declaration, protocol_declaration, etc.)
+        # fall through to name_fields lookup below
+
     if node.type not in spec.name_fields:
         return None
     
@@ -471,6 +501,19 @@ def _build_signature(node, spec: LanguageSpec, source_bytes: bytes) -> str:
         body = None
         for child in node.children:
             if child.type in ("function_body", "class_body", "enum_class_body"):
+                body = child
+                break
+        end_byte = body.start_byte if body else node.end_byte
+    elif spec.ts_language == "swift":
+        # Swift body types: function_body (functions/init/deinit), class_body
+        # (class/struct/extension/actor), enum_class_body (enum), protocol_body
+        # (protocol), computed_property (subscript)
+        body = None
+        for child in node.children:
+            if child.type in (
+                "function_body", "class_body", "enum_class_body",
+                "protocol_body", "computed_property",
+            ):
                 body = child
                 break
         end_byte = body.start_byte if body else node.end_byte
@@ -702,6 +745,17 @@ def _extract_decorators(node, spec: LanguageSpec, source_bytes: bytes) -> list[s
             if child.type == "modifiers":
                 for mod_child in child.children:
                     if mod_child.type == "annotation":
+                        decorators.append(source_bytes[mod_child.start_byte:mod_child.end_byte].decode("utf-8").strip())
+        return decorators
+
+    if spec.ts_language == "swift":
+        # Swift: attributes can be direct children or inside a modifiers child
+        for child in node.children:
+            if child.type == "attribute":
+                decorators.append(source_bytes[child.start_byte:child.end_byte].decode("utf-8").strip())
+            elif child.type == "modifiers":
+                for mod_child in child.children:
+                    if mod_child.type == "attribute":
                         decorators.append(source_bytes[mod_child.start_byte:mod_child.end_byte].decode("utf-8").strip())
         return decorators
 
@@ -963,45 +1017,55 @@ def _extract_constant(
             content_hash=c_hash,
         )
 
-    # Swift: let MAX_SPEED = 100  (property_declaration with let binding)
-    if node.type == "property_declaration":
-        # Only extract immutable `let` bindings (not `var`)
-        binding = None
+    # Swift: let MAX_SIZE = 100  (property_declaration with let binding)
+    if node.type == "property_declaration" and language == "swift":
+        # Check for `let` keyword inside value_binding_pattern
+        is_let = False
         for child in node.children:
             if child.type == "value_binding_pattern":
-                binding = child
-                break
-        if not binding:
-            return None
-        mutability = binding.child_by_field_name("mutability")
-        if not mutability or mutability.text != b"let":
-            return None
-        pattern = node.child_by_field_name("name")
-        if not pattern:
-            return None
-        name_node = pattern.child_by_field_name("bound_identifier")
-        if not name_node:
-            # fallback: first simple_identifier in pattern
-            for child in pattern.children:
-                if child.type == "simple_identifier":
-                    name_node = child
+                for kw in child.children:
+                    if source_bytes[kw.start_byte:kw.end_byte] == b"let":
+                        is_let = True
                     break
-        if not name_node:
+                break
+        if not is_let:
             return None
-        name = source_bytes[name_node.start_byte:name_node.end_byte].decode("utf-8")
+
+        # Extract name from pattern > simple_identifier
+        name = None
+        for child in node.children:
+            if child.type == "pattern":
+                for sub in child.children:
+                    if sub.type == "simple_identifier":
+                        name = source_bytes[sub.start_byte:sub.end_byte].decode("utf-8")
+                        break
+                break
+        if not name:
+            return None
+
+        # Only index UPPER_CASE or PascalCase_With_Underscore constants
         if not (name.isupper() or (len(name) > 1 and name[0].isupper() and "_" in name)):
             return None
+
+        # Qualify with container name for static constants inside types
+        qualified_name = name
+        if node.parent is not None and node.parent.type in ("class_body", "enum_class_body"):
+            grandparent = node.parent.parent
+            if grandparent is not None:
+                container_name = _extract_name(grandparent, spec, source_bytes)
+                if container_name:
+                    qualified_name = f"{container_name}.{name}"
+
         sig = source_bytes[node.start_byte:node.end_byte].decode("utf-8").strip()
-        const_bytes = source_bytes[node.start_byte:node.end_byte]
-        c_hash = compute_content_hash(const_bytes)
+        c_hash = compute_content_hash(source_bytes[node.start_byte:node.end_byte])
         return Symbol(
-            id=make_symbol_id(filename, name, "constant"),
+            id=make_symbol_id(filename, qualified_name, "constant"),
             file=filename,
             name=name,
-            qualified_name=name,
+            qualified_name=qualified_name,
             kind="constant",
             language=language,
-            signature=sig[:100],
+            signature=sig[:120],
             line=node.start_point[0] + 1,
             end_line=node.end_point[0] + 1,
             byte_offset=node.start_byte,

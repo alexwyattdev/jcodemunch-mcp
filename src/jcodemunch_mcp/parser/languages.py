@@ -470,28 +470,29 @@ SWIFT_SPEC = LanguageSpec(
     ts_language="swift",
     symbol_node_types={
         "function_declaration": "function",
-        "class_declaration": "class",    # covers class, struct, enum, extension
+        "class_declaration": "class",              # class, struct, enum, extension, actor
         "protocol_declaration": "type",
         "typealias_declaration": "type",
         "init_declaration": "method",
         "deinit_declaration": "method",
-        "property_declaration": "constant",
+        "subscript_declaration": "method",
+        "protocol_function_declaration": "method",
     },
     name_fields={
-        "function_declaration": "name",  # simple_identifier child
-        "class_declaration": "name",     # type_identifier child
-        "protocol_declaration": "name",  # type_identifier child
-        "typealias_declaration": "name", # user_type child
-        "init_declaration": "name",      # "init" keyword token
-        "deinit_declaration": "name",    # "deinit" keyword token
-        "property_declaration": "name",  # pattern child
+        "function_declaration": "name",            # simple_identifier
+        "class_declaration": "name",               # type_identifier (extension handled in _extract_name)
+        "protocol_declaration": "name",            # type_identifier
+        "typealias_declaration": "name",           # type_identifier
+        "protocol_function_declaration": "name",   # simple_identifier
+        # init / deinit / subscript handled by Swift block in _extract_name
     },
-    param_fields={},  # Swift params are unnamed children; signature captured via source range
-    return_type_fields={},  # return type shares field "name" with function identifier
-    docstring_strategy="preceding_comment",  # /// and /* */ doc comments
-    decorator_node_type=None,
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type="attribute",
+    decorator_from_children=True,
     container_node_types=["class_declaration", "protocol_declaration"],
-    constant_patterns=[],  # property_declaration handled via symbol_node_types
+    constant_patterns=["property_declaration"],
     type_patterns=["protocol_declaration", "typealias_declaration"],
 )
 

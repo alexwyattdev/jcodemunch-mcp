@@ -268,14 +268,15 @@ def _extract_symbol(
         else:
             qualified_name = name
 
-    # Swift extensions: keep name as the extended type (so methods qualify as
-    # Base.method) but suffix qualified_name with "+extension" so the extension
-    # symbol itself gets a distinct ID from `class Base {}`.  When a file has
-    # multiple extensions of the same type, _disambiguate_overloads() appends
-    # ordinal suffixes (~1, ~2, …) — stable across unrelated line-number shifts.
-    if spec.ts_language == "swift" and node.type == "class_declaration" and not parent_symbol:
-        if _is_swift_extension(node, source_bytes):
-            qualified_name = f"{qualified_name}+extension"
+    # Swift extensions intentionally share qualified_name (and thus symbol ID)
+    # with the extended type, e.g. both `class Base {}` and `extension Base {}`
+    # produce qualified_name="Base" / id="…::Base#class".  The collision is
+    # deliberate: extension methods need parent IDs ending with "::Base#class"
+    # so that downstream code (file_summarize._heuristic_summary) can count
+    # them via `s.parent.endswith(f"::{cls.name}#class")`.  Adding any suffix
+    # here would sever that relationship.  The last-writer-wins collision in
+    # CodeIndex._symbol_index is acceptable — all methods remain correctly
+    # parented regardless of which Base symbol survives.
 
     signature_node = node
     if language == "cpp":

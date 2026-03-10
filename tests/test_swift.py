@@ -21,8 +21,22 @@ def all_names(source: str) -> list[str]:
 
 
 def sym_map(source: str) -> dict:
-    """Return {qualified_name: Symbol} dict for easy assertions."""
-    return {s.qualified_name: s for s in parse(source)}
+    """Return {qualified_name: Symbol} dict for easy assertions.
+
+    Raises AssertionError if two symbols share the same qualified_name so
+    tests cannot silently pass on a dict that dropped duplicate symbols.
+    Use parse() directly for sources that legitimately contain duplicates
+    (e.g. multiple extensions of the same type, overloaded init declarations).
+    """
+    result: dict = {}
+    for s in parse(source):
+        if s.qualified_name in result:
+            raise AssertionError(
+                f"sym_map: duplicate qualified_name {s.qualified_name!r} — "
+                "use parse() directly for sources with intentional duplicates"
+            )
+        result[s.qualified_name] = s
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -127,8 +141,10 @@ def test_extension_indexed():
 
 
 def test_extension_method_scoped_to_extended_type():
-    m = sym_map(EXTENSION)
-    assert "Base.extended" in m
+    # sym_map can't be used here: class Base and both extension Base blocks
+    # share qualified_name "Base" (intentional — see _extract_symbol comment).
+    syms = parse(EXTENSION)
+    assert any(s.qualified_name == "Base.extended" for s in syms)
 
 
 # ---------------------------------------------------------------------------

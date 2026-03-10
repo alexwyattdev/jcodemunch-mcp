@@ -489,6 +489,37 @@ def test_companion_constant_collision_produces_distinct_ids():
     assert "ClassB.Companion.TAG" in qnames, f"Missing ClassB.Companion.TAG in {qnames}"
 
 
+NESTED_COLLISION = """\
+class A {
+    class Inner {
+        companion object {
+            const val TAG = "A.Inner"
+        }
+    }
+}
+
+class B {
+    class Inner {
+        companion object {
+            const val TAG = "B.Inner"
+        }
+    }
+}
+"""
+
+
+def test_nested_companion_constant_collision_produces_distinct_ids():
+    """Deeply nested companions must include the full class chain to avoid collisions."""
+    syms = parse_file(NESTED_COLLISION, "Test.kt", "kotlin")
+    constants = [s for s in syms if s.kind == "constant" and s.name == "TAG"]
+    assert len(constants) == 2, f"Expected 2 TAG constants, got {len(constants)}"
+    ids = {s.id for s in constants}
+    assert len(ids) == 2, f"Nested TAG constants share the same ID: {ids}"
+    qnames = {s.qualified_name for s in constants}
+    assert "A.Inner.Companion.TAG" in qnames, f"Missing A.Inner.Companion.TAG in {qnames}"
+    assert "B.Inner.Companion.TAG" in qnames, f"Missing B.Inner.Companion.TAG in {qnames}"
+
+
 # ---------------------------------------------------------------------------
 # 14. Annotations on declarations
 # ---------------------------------------------------------------------------

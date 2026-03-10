@@ -133,6 +133,17 @@ extension Base: CustomStringConvertible {
 }
 """
 
+EXTENSION_WITH_MODIFIERS = """\
+class Widget {}
+public extension Widget {
+    func publicMethod() {}
+}
+@available(iOS 15, *)
+extension Widget: Hashable {
+    func hash(into hasher: inout Hasher) {}
+}
+"""
+
 
 def test_extension_indexed():
     names = symbols_by_kind(EXTENSION, "class")
@@ -165,6 +176,42 @@ def test_extension_methods_have_correct_parent():
     # The parent should be the extension container, not the plain base class.
     assert extended.parent is not None
     assert "+extension:" in extended.parent
+
+
+def test_extension_with_public_modifier_indexed():
+    # `public extension Widget {}` should be detected as an extension of Widget.
+    names = symbols_by_kind(EXTENSION_WITH_MODIFIERS, "class")
+    assert names.count("Widget") >= 1
+
+
+def test_extension_with_public_modifier_name():
+    # The symbol name should be the extended type, not the modifier keyword.
+    syms = parse(EXTENSION_WITH_MODIFIERS)
+    containers = [s for s in syms if s.kind == "class"]
+    assert all(s.name == "Widget" for s in containers)
+
+
+def test_extension_with_attribute_indexed():
+    # `@available(...) extension Widget {}` should be detected as an extension.
+    syms = parse(EXTENSION_WITH_MODIFIERS)
+    containers = [s for s in syms if s.kind == "class" and s.name == "Widget"]
+    assert len(containers) >= 2, "Both extensions should be indexed"
+
+
+def test_extension_with_modifiers_ids_unique():
+    # All Widget containers (base class + two extensions) should have distinct
+    # IDs so _disambiguate_overloads is never triggered.
+    # Extension symbols (not the base class) should have "+extension:" in their
+    # ID to confirm proper detection of `public extension` and `@available` forms.
+    syms = parse(EXTENSION_WITH_MODIFIERS)
+    containers = [s for s in syms if s.kind == "class" and s.name == "Widget"]
+    ids = [s.id for s in containers]
+    assert len(ids) == len(set(ids)), "Extension container IDs must be unique"
+    ext_ids = [s.id for s in containers if "+extension:" in s.id]
+    assert len(ext_ids) >= 2, (
+        "Both extensions (public and @available) should have '+extension:' in their IDs; "
+        f"found: {ids}"
+    )
 
 
 # ---------------------------------------------------------------------------

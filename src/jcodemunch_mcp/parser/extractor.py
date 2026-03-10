@@ -1463,10 +1463,11 @@ def _disambiguate_overloads(symbols: list[Symbol]) -> list[Symbol]:
     "file.py::foo#function~1" and "file.py::foo#function~2".
 
     Also rewrites Symbol.parent references so child symbols continue to point
-    to their (renamed) container after disambiguation.  When multiple containers
-    share the same original ID the last-writer-wins mapping is used as a
-    best-effort heuristic; callers should prefer giving containers unique IDs
-    at extraction time to avoid ambiguity.
+    to their (renamed) container after disambiguation.  Parent pointers are
+    updated in traversal order: each child is re-parented to the most recently
+    renamed container with the matching original ID seen before that child in
+    the symbol list.  This preserves correct parent/child relationships when
+    multiple containers share the same original ID (e.g. Swift extensions).
     """
     from collections import Counter
 
@@ -1477,24 +1478,23 @@ def _disambiguate_overloads(symbols: list[Symbol]) -> list[Symbol]:
     if not duplicated:
         return symbols
 
-    # Track ordinals per duplicate ID; also build a rename map for parent fixup.
+    # Process symbols in order, tracking the most recently assigned new_id for
+    # each duplicated old_id.  When a child's parent matches an old_id, it is
+    # re-parented to the new_id that was active at the time the child is
+    # encountered (i.e. the closest preceding renamed container).
     ordinals: dict[str, int] = {}
-    id_renames: dict[str, str] = {}
+    most_recent_rename: dict[str, str] = {}  # old_id -> most recently assigned new_id
     result = []
     for sym in symbols:
         if sym.id in duplicated:
             old_id = sym.id
             ordinals[old_id] = ordinals.get(old_id, 0) + 1
             new_id = f"{old_id}~{ordinals[old_id]}"
-            id_renames[old_id] = new_id  # last-writer-wins
+            most_recent_rename[old_id] = new_id
             sym.id = new_id
+        if sym.parent in most_recent_rename:
+            sym.parent = most_recent_rename[sym.parent]
         result.append(sym)
-
-    # Fix up any parent pointers that refer to a now-renamed ID.
-    if id_renames:
-        for sym in result:
-            if sym.parent in id_renames:
-                sym.parent = id_renames[sym.parent]
 
     return result
 

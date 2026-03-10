@@ -268,15 +268,14 @@ def _extract_symbol(
         else:
             qualified_name = name
 
-    # Swift extensions intentionally share qualified_name (and thus symbol ID)
-    # with the extended type, e.g. both `class Base {}` and `extension Base {}`
-    # produce qualified_name="Base" / id="…::Base#class".  The collision is
-    # deliberate: extension methods need parent IDs ending with "::Base#class"
-    # so that downstream code (file_summarize._heuristic_summary) can count
-    # them via `s.parent.endswith(f"::{cls.name}#class")`.  Adding any suffix
-    # here would sever that relationship.  The last-writer-wins collision in
-    # CodeIndex._symbol_index is acceptable — all methods remain correctly
-    # parented regardless of which Base symbol survives.
+    # Swift extensions: give each extension a unique qualified_name (and thus
+    # unique symbol ID) by appending "+extension:<line>".  symbol.name stays
+    # as the extended type name so child methods still receive
+    # qualified_name = "Base.method" (because _extract_symbol uses
+    # parent_symbol.name, not parent_symbol.qualified_name).
+    if language == "swift" and node.type == "class_declaration" and not parent_symbol:
+        if _is_swift_extension(node, source_bytes):
+            qualified_name = f"{qualified_name}+extension:{node.start_point[0] + 1}"
 
     signature_node = node
     if language == "cpp":
@@ -1462,6 +1461,12 @@ def _disambiguate_overloads(symbols: list[Symbol]) -> list[Symbol]:
 
     E.g., if two symbols have ID "file.py::foo#function", they become
     "file.py::foo#function~1" and "file.py::foo#function~2".
+
+    Also rewrites Symbol.parent references so child symbols continue to point
+    to their (renamed) container after disambiguation.  When multiple containers
+    share the same original ID the last-writer-wins mapping is used as a
+    best-effort heuristic; callers should prefer giving containers unique IDs
+    at extraction time to avoid ambiguity.
     """
     from collections import Counter
 
@@ -1472,14 +1477,25 @@ def _disambiguate_overloads(symbols: list[Symbol]) -> list[Symbol]:
     if not duplicated:
         return symbols
 
-    # Track ordinals per duplicate ID
+    # Track ordinals per duplicate ID; also build a rename map for parent fixup.
     ordinals: dict[str, int] = {}
+    id_renames: dict[str, str] = {}
     result = []
     for sym in symbols:
         if sym.id in duplicated:
-            ordinals[sym.id] = ordinals.get(sym.id, 0) + 1
-            sym.id = f"{sym.id}~{ordinals[sym.id]}"
+            old_id = sym.id
+            ordinals[old_id] = ordinals.get(old_id, 0) + 1
+            new_id = f"{old_id}~{ordinals[old_id]}"
+            id_renames[old_id] = new_id  # last-writer-wins
+            sym.id = new_id
         result.append(sym)
+
+    # Fix up any parent pointers that refer to a now-renamed ID.
+    if id_renames:
+        for sym in result:
+            if sym.parent in id_renames:
+                sym.parent = id_renames[sym.parent]
+
     return result
 
 

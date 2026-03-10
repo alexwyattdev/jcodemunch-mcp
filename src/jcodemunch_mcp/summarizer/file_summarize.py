@@ -10,14 +10,25 @@ def _heuristic_summary(file_path: str, symbols: list[Symbol]) -> str:
 
     classes = [s for s in symbols if s.kind == "class"]
     functions = [s for s in symbols if s.kind == "function"]
-    methods = [s for s in symbols if s.kind == "method"]
     constants = [s for s in symbols if s.kind == "constant"]
     types = [s for s in symbols if s.kind == "type"]
 
     parts = []
     if classes:
-        for cls in classes[:2]:
-            method_count = sum(1 for s in symbols if s.parent and s.parent.endswith(f"::{cls.name}#class"))
+        # Deduplicate by name so base class + its extensions only produce one
+        # summary line.  Collect all container IDs per name so that methods
+        # parented to any container (base or extension) are counted correctly.
+        seen_names: set[str] = set()
+        unique_classes = []
+        class_container_ids: dict[str, set[str]] = {}
+        for cls in classes:
+            class_container_ids.setdefault(cls.name, set()).add(cls.id)
+            if cls.name not in seen_names:
+                seen_names.add(cls.name)
+                unique_classes.append(cls)
+        for cls in unique_classes[:2]:
+            container_ids = class_container_ids[cls.name]
+            method_count = sum(1 for s in symbols if s.kind == "method" and s.parent in container_ids)
             parts.append(f"Defines {cls.name} class ({method_count} methods)")
     if functions:
         if len(functions) <= 3:

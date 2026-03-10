@@ -141,10 +141,30 @@ def test_extension_indexed():
 
 
 def test_extension_method_scoped_to_extended_type():
-    # sym_map can't be used here: class Base and both extension Base blocks
-    # share qualified_name "Base" (intentional — see _extract_symbol comment).
+    # Extensions get a unique qualified_name ("Base+extension:<line>") so their
+    # symbol IDs don't collide with the base class, but child methods still
+    # use the base type name as qualifier → qualified_name = "Base.extended".
     syms = parse(EXTENSION)
     assert any(s.qualified_name == "Base.extended" for s in syms)
+
+
+def test_extension_container_ids_are_unique():
+    # Each extension must have a distinct symbol ID from the base class and
+    # from one another so that _disambiguate_overloads never renames them.
+    syms = parse(EXTENSION)
+    containers = [s for s in syms if s.kind == "class" and s.name == "Base"]
+    ids = [s.id for s in containers]
+    assert len(ids) == len(set(ids)), "Extension container IDs must be unique"
+
+
+def test_extension_methods_have_correct_parent():
+    # Methods declared inside an extension must have their parent pointer set
+    # to the extension container's ID (not the base class ID).
+    syms = parse(EXTENSION)
+    extended = next(s for s in syms if s.name == "extended")
+    # The parent should be the extension container, not the plain base class.
+    assert extended.parent is not None
+    assert "+extension:" in extended.parent
 
 
 # ---------------------------------------------------------------------------

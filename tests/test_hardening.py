@@ -517,6 +517,36 @@ def process(x: str) -> str:
         for s in symbols:
             assert "~" not in s.id, f"Symbol {s.name} has unexpected ordinal: {s.id}"
 
+    def test_parent_pointers_updated_after_disambiguation(self):
+        """Child parent IDs must be updated when the container ID is renamed."""
+        from jcodemunch_mcp.parser.extractor import _disambiguate_overloads
+        from jcodemunch_mcp.parser.symbols import Symbol
+
+        def _sym(id_, kind, parent=None):
+            name = id_.split("::")[-1].split("#")[0]
+            return Symbol(
+                id=id_, file="f.py", name=name, qualified_name=name,
+                kind=kind, language="python", signature="", parent=parent,
+            )
+
+        container_a = _sym("f.py::Box#class", "class")
+        container_b = _sym("f.py::Box#class", "class")
+        child_a = _sym("f.py::Box.method_a#method", "method", parent="f.py::Box#class")
+        child_b = _sym("f.py::Box.method_b#method", "method", parent="f.py::Box#class")
+
+        result = _disambiguate_overloads([container_a, child_a, container_b, child_b])
+
+        # Container IDs should be renamed
+        container_ids = {s.id for s in result if s.kind == "class"}
+        assert "f.py::Box#class~1" in container_ids
+        assert "f.py::Box#class~2" in container_ids
+
+        # All child parent pointers should be updated (no stale original ID)
+        child_parents = {s.parent for s in result if s.kind == "method"}
+        assert "f.py::Box#class" not in child_parents, (
+            "Stale parent pointer found — parent should have been updated to the renamed ID"
+        )
+
 
 # ===========================================================================
 # 3. Content Hashing

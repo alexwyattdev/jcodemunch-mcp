@@ -38,6 +38,34 @@ def test_heuristic_summary_single_class():
     assert "2 methods" in result
 
 
+def test_heuristic_summary_class_with_extensions():
+    """Methods in extensions are counted together with the base class."""
+    base = _make_symbol("Base", "class")
+    ext = Symbol(
+        id="test.swift::Base+extension:5#class",
+        file="test.swift",
+        name="Base",
+        qualified_name="Base+extension:5",
+        kind="class",
+        language="swift",
+        signature="extension Base",
+    )
+    ext_method = Symbol(
+        id="test.swift::Base.extended#method",
+        file="test.swift",
+        name="extended",
+        qualified_name="Base.extended",
+        kind="method",
+        language="swift",
+        signature="func extended()",
+        parent="test.swift::Base+extension:5#class",
+    )
+    result = _heuristic_summary("test.swift", [base, ext, ext_method])
+    # Should report Base only once and count the extension method
+    assert result.count("Base") == 1
+    assert "1 methods" in result
+
+
 def test_heuristic_summary_multi_function():
     funcs = [_make_symbol(f"func_{i}", "function") for i in range(5)]
     result = _heuristic_summary("test.py", funcs)

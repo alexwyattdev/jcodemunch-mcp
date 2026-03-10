@@ -199,7 +199,17 @@ def _walk_tree(
         and node.parent.parent is not None
         and node.parent.parent.type in ("companion_object", "object_declaration")
     )
-    if node.type in spec.constant_patterns and (parent_symbol is None or _in_kotlin_static_scope):
+    # For Swift, also extract property_declaration inside class_body or enum_class_body.
+    # This covers both `static let` and plain `let` constants defined in type bodies;
+    # the UPPER_CASE/PascalCase filter in _extract_constant narrows what actually gets indexed.
+    _in_swift_type_scope = (
+        language == "swift"
+        and node.parent is not None
+        and node.parent.type in ("class_body", "enum_class_body")
+    )
+    if node.type in spec.constant_patterns and (
+        parent_symbol is None or _in_kotlin_static_scope or _in_swift_type_scope
+    ):
         const_symbol = _extract_constant(node, spec, source_bytes, filename, language)
         if const_symbol:
             symbols.append(const_symbol)
@@ -258,6 +268,15 @@ def _extract_symbol(
         else:
             qualified_name = name
 
+    # Swift extensions: give each extension a unique qualified_name (and thus
+    # unique symbol ID) by appending "+extension:<line>".  symbol.name stays
+    # as the extended type name so child methods still receive
+    # qualified_name = "Base.method" (because _extract_symbol uses
+    # parent_symbol.name, not parent_symbol.qualified_name).
+    if language == "swift" and node.type == "class_declaration" and not parent_symbol:
+        if _is_swift_extension(node, source_bytes):
+            qualified_name = f"{qualified_name}+extension:{node.start_point[0] + 1}"
+
     signature_node = node
     if language == "cpp":
         wrapper = _nearest_cpp_template_wrapper(node)
@@ -307,6 +326,20 @@ def _extract_symbol(
     )
     
     return symbol
+
+
+def _is_swift_extension(node, source_bytes: bytes) -> bool:
+    """Return True if *node* is a Swift extension declaration.
+
+    tree-sitter-swift represents extensions as ``class_declaration`` nodes
+    whose first unnamed child token is the ``extension`` keyword (as opposed
+    to ``class``, ``struct``, ``enum``, or ``actor``).
+    """
+    first_unnamed = next((c for c in node.children if not c.is_named), None)
+    return (
+        first_unnamed is not None
+        and source_bytes[first_unnamed.start_byte:first_unnamed.end_byte] == b"extension"
+    )
 
 
 def _extract_name(node, spec: LanguageSpec, source_bytes: bytes) -> Optional[str]:
@@ -371,6 +404,25 @@ def _extract_name(node, spec: LanguageSpec, source_bytes: bytes) -> Optional[str
                 if name_node:
                     return source_bytes[name_node.start_byte:name_node.end_byte].decode("utf-8")
         return None
+
+    # Swift: init/deinit/subscript use fixed names; extension name is the extended type
+    if spec.ts_language == "swift":
+        if node.type == "init_declaration":
+            return "init"
+        if node.type == "deinit_declaration":
+            return "deinit"
+        if node.type == "subscript_declaration":
+            return "subscript"
+        if node.type == "class_declaration":
+            if _is_swift_extension(node, source_bytes):
+                # Extended type name lives in the user_type child
+                for c in node.children:
+                    if c.type == "user_type":
+                        return source_bytes[c.start_byte:c.end_byte].decode("utf-8")
+                return None
+            # class / struct / enum / actor: fall through to name_fields lookup
+        # All other Swift nodes (function_declaration, protocol_declaration, etc.)
+        # fall through to name_fields lookup below
 
     if node.type not in spec.name_fields:
         return None
@@ -471,6 +523,19 @@ def _build_signature(node, spec: LanguageSpec, source_bytes: bytes) -> str:
         body = None
         for child in node.children:
             if child.type in ("function_body", "class_body", "enum_class_body"):
+                body = child
+                break
+        end_byte = body.start_byte if body else node.end_byte
+    elif spec.ts_language == "swift":
+        # Swift body types: function_body (functions/init/deinit), class_body
+        # (class/struct/extension/actor), enum_class_body (enum), protocol_body
+        # (protocol), computed_property (subscript)
+        body = None
+        for child in node.children:
+            if child.type in (
+                "function_body", "class_body", "enum_class_body",
+                "protocol_body", "computed_property",
+            ):
                 body = child
                 break
         end_byte = body.start_byte if body else node.end_byte
@@ -702,6 +767,17 @@ def _extract_decorators(node, spec: LanguageSpec, source_bytes: bytes) -> list[s
             if child.type == "modifiers":
                 for mod_child in child.children:
                     if mod_child.type == "annotation":
+                        decorators.append(source_bytes[mod_child.start_byte:mod_child.end_byte].decode("utf-8").strip())
+        return decorators
+
+    if spec.ts_language == "swift":
+        # Swift: attributes can be direct children or inside a modifiers child
+        for child in node.children:
+            if child.type == "attribute":
+                decorators.append(source_bytes[child.start_byte:child.end_byte].decode("utf-8").strip())
+            elif child.type == "modifiers":
+                for mod_child in child.children:
+                    if mod_child.type == "attribute":
                         decorators.append(source_bytes[mod_child.start_byte:mod_child.end_byte].decode("utf-8").strip())
         return decorators
 
@@ -963,45 +1039,55 @@ def _extract_constant(
             content_hash=c_hash,
         )
 
-    # Swift: let MAX_SPEED = 100  (property_declaration with let binding)
-    if node.type == "property_declaration":
-        # Only extract immutable `let` bindings (not `var`)
-        binding = None
+    # Swift: let MAX_SIZE = 100  (property_declaration with let binding)
+    if node.type == "property_declaration" and language == "swift":
+        # Check for `let` keyword inside value_binding_pattern
+        is_let = False
         for child in node.children:
             if child.type == "value_binding_pattern":
-                binding = child
+                for kw in child.children:
+                    if source_bytes[kw.start_byte:kw.end_byte] == b"let":
+                        is_let = True
+                        break
                 break
-        if not binding:
+        if not is_let:
             return None
-        mutability = binding.child_by_field_name("mutability")
-        if not mutability or mutability.text != b"let":
+
+        # Extract name from pattern > simple_identifier
+        name = None
+        for child in node.children:
+            if child.type == "pattern":
+                for sub in child.children:
+                    if sub.type == "simple_identifier":
+                        name = source_bytes[sub.start_byte:sub.end_byte].decode("utf-8")
+                        break
+                break
+        if not name:
             return None
-        pattern = node.child_by_field_name("name")
-        if not pattern:
-            return None
-        name_node = pattern.child_by_field_name("bound_identifier")
-        if not name_node:
-            # fallback: first simple_identifier in pattern
-            for child in pattern.children:
-                if child.type == "simple_identifier":
-                    name_node = child
-                    break
-        if not name_node:
-            return None
-        name = source_bytes[name_node.start_byte:name_node.end_byte].decode("utf-8")
+
+        # Only index UPPER_CASE or PascalCase_With_Underscore constants
         if not (name.isupper() or (len(name) > 1 and name[0].isupper() and "_" in name)):
             return None
+
+        # Qualify with container name for let constants found in type bodies
+        qualified_name = name
+        if node.parent is not None and node.parent.type in ("class_body", "enum_class_body"):
+            grandparent = node.parent.parent
+            if grandparent is not None:
+                container_name = _extract_name(grandparent, spec, source_bytes)
+                if container_name:
+                    qualified_name = f"{container_name}.{name}"
+
         sig = source_bytes[node.start_byte:node.end_byte].decode("utf-8").strip()
-        const_bytes = source_bytes[node.start_byte:node.end_byte]
-        c_hash = compute_content_hash(const_bytes)
+        c_hash = compute_content_hash(source_bytes[node.start_byte:node.end_byte])
         return Symbol(
-            id=make_symbol_id(filename, name, "constant"),
+            id=make_symbol_id(filename, qualified_name, "constant"),
             file=filename,
             name=name,
-            qualified_name=name,
+            qualified_name=qualified_name,
             kind="constant",
             language=language,
-            signature=sig[:100],
+            signature=sig[:120],
             line=node.start_point[0] + 1,
             end_line=node.end_point[0] + 1,
             byte_offset=node.start_byte,
@@ -1375,6 +1461,12 @@ def _disambiguate_overloads(symbols: list[Symbol]) -> list[Symbol]:
 
     E.g., if two symbols have ID "file.py::foo#function", they become
     "file.py::foo#function~1" and "file.py::foo#function~2".
+
+    Also rewrites Symbol.parent references so child symbols continue to point
+    to their (renamed) container after disambiguation.  When multiple containers
+    share the same original ID the last-writer-wins mapping is used as a
+    best-effort heuristic; callers should prefer giving containers unique IDs
+    at extraction time to avoid ambiguity.
     """
     from collections import Counter
 
@@ -1385,14 +1477,25 @@ def _disambiguate_overloads(symbols: list[Symbol]) -> list[Symbol]:
     if not duplicated:
         return symbols
 
-    # Track ordinals per duplicate ID
+    # Track ordinals per duplicate ID; also build a rename map for parent fixup.
     ordinals: dict[str, int] = {}
+    id_renames: dict[str, str] = {}
     result = []
     for sym in symbols:
         if sym.id in duplicated:
-            ordinals[sym.id] = ordinals.get(sym.id, 0) + 1
-            sym.id = f"{sym.id}~{ordinals[sym.id]}"
+            old_id = sym.id
+            ordinals[old_id] = ordinals.get(old_id, 0) + 1
+            new_id = f"{old_id}~{ordinals[old_id]}"
+            id_renames[old_id] = new_id  # last-writer-wins
+            sym.id = new_id
         result.append(sym)
+
+    # Fix up any parent pointers that refer to a now-renamed ID.
+    if id_renames:
+        for sym in result:
+            if sym.parent in id_renames:
+                sym.parent = id_renames[sym.parent]
+
     return result
 
 

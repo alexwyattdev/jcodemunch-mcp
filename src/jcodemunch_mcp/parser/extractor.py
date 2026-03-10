@@ -481,13 +481,6 @@ def _build_signature(node, spec: LanguageSpec, source_bytes: bytes) -> str:
         if body:
             # Signature is from start of node to start of body
             end_byte = body.start_byte
-        elif spec.ts_language == "kotlin":
-            # Kotlin: function_body and class_body are positional, not named fields
-            end_byte = node.end_byte
-            for child in node.children:
-                if child.type in ("function_body", "class_body", "enum_class_body"):
-                    end_byte = child.start_byte
-                    break
         else:
             end_byte = node.end_byte
     
@@ -932,13 +925,21 @@ def _extract_constant(
         # Index const val always; index plain val/var only if UPPER_CASE (module-level convention)
         if not is_const and not (name.isupper() or (len(name) > 1 and name[0].isupper() and "_" in name)):
             return None
+        # Qualify with container name to avoid ID collisions when multiple
+        # companions/objects define the same constant name (e.g. TAG, DEFAULT).
+        container_owner = node.parent.parent if node.parent is not None else None
+        if container_owner is not None and container_owner.type in ("companion_object", "object_declaration"):
+            container_name = _extract_name(container_owner, spec, source_bytes)
+            qualified_name = f"{container_name}.{name}" if container_name else name
+        else:
+            qualified_name = name
         sig = source_bytes[node.start_byte:node.end_byte].decode("utf-8").strip()
         c_hash = compute_content_hash(source_bytes[node.start_byte:node.end_byte])
         return Symbol(
-            id=make_symbol_id(filename, name, "constant"),
+            id=make_symbol_id(filename, qualified_name, "constant"),
             file=filename,
             name=name,
-            qualified_name=name,
+            qualified_name=qualified_name,
             kind="constant",
             language=language,
             signature=sig[:120],

@@ -168,6 +168,50 @@ def test_extension_methods_have_correct_parent():
 
 
 # ---------------------------------------------------------------------------
+# Extension with modifiers and attributes
+# ---------------------------------------------------------------------------
+
+EXTENSION_WITH_MODIFIERS = """\
+class Widget {}
+public extension Widget {
+    func publicMethod() -> Int { 0 }
+}
+@available(iOS 15, *)
+extension Widget {
+    func modernMethod() {}
+}
+"""
+
+
+def test_extension_with_public_modifier_indexed():
+    # public extension should still be detected as an extension with Widget as name.
+    syms = parse(EXTENSION_WITH_MODIFIERS)
+    containers = [s for s in syms if s.kind == "class" and s.name == "Widget"]
+    assert any(s.qualified_name.startswith("Widget+extension:") for s in containers)
+
+
+def test_extension_with_attribute_indexed():
+    # @available extension methods should be reachable.
+    names = all_names(EXTENSION_WITH_MODIFIERS)
+    assert "modernMethod" in names
+
+
+def test_extension_with_modifiers_methods_qualified():
+    # Methods from modified/attributed extensions still use base type as qualifier.
+    syms = parse(EXTENSION_WITH_MODIFIERS)
+    assert any(s.qualified_name == "Widget.publicMethod" for s in syms)
+    assert any(s.qualified_name == "Widget.modernMethod" for s in syms)
+
+
+def test_extension_with_modifiers_container_ids_unique():
+    # All Widget containers (base class + extensions) must have distinct IDs.
+    syms = parse(EXTENSION_WITH_MODIFIERS)
+    containers = [s for s in syms if s.kind == "class" and s.name == "Widget"]
+    ids = [s.id for s in containers]
+    assert len(ids) == len(set(ids)), "Extension container IDs must be unique"
+
+
+# ---------------------------------------------------------------------------
 # Actor
 # ---------------------------------------------------------------------------
 

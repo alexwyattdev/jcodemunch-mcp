@@ -1463,10 +1463,9 @@ def _disambiguate_overloads(symbols: list[Symbol]) -> list[Symbol]:
     "file.py::foo#function~1" and "file.py::foo#function~2".
 
     Also rewrites Symbol.parent references so child symbols continue to point
-    to their (renamed) container after disambiguation.  When multiple containers
-    share the same original ID the last-writer-wins mapping is used as a
-    best-effort heuristic; callers should prefer giving containers unique IDs
-    at extraction time to avoid ambiguity.
+    to their (renamed) container after disambiguation.  Each child is
+    re-parented to the closest preceding renamed container that originally
+    shared the same ID, preserving correct parent/child relationships.
     """
     from collections import Counter
 
@@ -1477,24 +1476,38 @@ def _disambiguate_overloads(symbols: list[Symbol]) -> list[Symbol]:
     if not duplicated:
         return symbols
 
-    # Track ordinals per duplicate ID; also build a rename map for parent fixup.
+    # Track ordinals per duplicate ID and a rename timeline for parent fixup.
+    # rename_timeline maps original_id -> list of (result_index, new_id) in
+    # traversal order, so each child can be re-parented to the closest preceding
+    # container that originally shared the same ID.
     ordinals: dict[str, int] = {}
-    id_renames: dict[str, str] = {}
+    rename_timeline: dict[str, list[tuple[int, str]]] = {}
     result = []
     for sym in symbols:
         if sym.id in duplicated:
             old_id = sym.id
             ordinals[old_id] = ordinals.get(old_id, 0) + 1
             new_id = f"{old_id}~{ordinals[old_id]}"
-            id_renames[old_id] = new_id  # last-writer-wins
+            rename_timeline.setdefault(old_id, []).append((len(result), new_id))
             sym.id = new_id
         result.append(sym)
 
-    # Fix up any parent pointers that refer to a now-renamed ID.
-    if id_renames:
-        for sym in result:
-            if sym.parent in id_renames:
-                sym.parent = id_renames[sym.parent]
+    # Fix up parent pointers: each child is re-parented to the closest preceding
+    # renamed container that originally held its parent ID.  This preserves
+    # correct parent/child relationships when multiple containers share an ID.
+    if rename_timeline:
+        for idx, sym in enumerate(result):
+            if sym.parent in rename_timeline:
+                history = rename_timeline[sym.parent]
+                # Default to the first rename; advance as long as the rename
+                # occurred before this child in traversal order.
+                closest_new_id = history[0][1]
+                for pos, new_id in history:
+                    if pos < idx:
+                        closest_new_id = new_id
+                    else:
+                        break
+                sym.parent = closest_new_id
 
     return result
 

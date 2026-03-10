@@ -269,12 +269,13 @@ def _extract_symbol(
             qualified_name = name
 
     # Swift extensions: keep name as the extended type (so methods qualify as
-    # Base.method) but suffix qualified_name with the start line so the extension
-    # symbol itself gets a unique ID that won't collide with `class Base {}` or
-    # other `extension Base {}` blocks in the same file.
+    # Base.method) but suffix qualified_name with "+extension" so the extension
+    # symbol itself gets a distinct ID from `class Base {}`.  When a file has
+    # multiple extensions of the same type, _disambiguate_overloads() appends
+    # ordinal suffixes (~1, ~2, …) — stable across unrelated line-number shifts.
     if spec.ts_language == "swift" and node.type == "class_declaration" and not parent_symbol:
         if _is_swift_extension(node, source_bytes):
-            qualified_name = f"{qualified_name}+extension:{node.start_point[0] + 1}"
+            qualified_name = f"{qualified_name}+extension"
 
     signature_node = node
     if language == "cpp":
@@ -331,12 +332,14 @@ def _is_swift_extension(node, source_bytes: bytes) -> bool:
     """Return True if *node* is a Swift extension declaration.
 
     tree-sitter-swift represents extensions as ``class_declaration`` nodes
-    whose first unnamed child keyword is ``extension``.
+    whose first unnamed child token is the ``extension`` keyword (as opposed
+    to ``class``, ``struct``, ``enum``, or ``actor``).
     """
-    for child in node.children:
-        if not child.is_named:
-            return source_bytes[child.start_byte:child.end_byte] == b"extension"
-    return False
+    first_unnamed = next((c for c in node.children if not c.is_named), None)
+    return (
+        first_unnamed is not None
+        and source_bytes[first_unnamed.start_byte:first_unnamed.end_byte] == b"extension"
+    )
 
 
 def _extract_name(node, spec: LanguageSpec, source_bytes: bytes) -> Optional[str]:

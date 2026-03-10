@@ -461,11 +461,11 @@ C_SPEC = LanguageSpec(
 
 
 # Swift specification
-# Note: tree-sitter-swift uses class_declaration for class/struct/enum/extension;
-# the declaration_kind child field ("class"/"struct"/"enum"/"extension") disambiguates
+# Note: tree-sitter-swift uses class_declaration for class/struct/enum/extension/actor;
+# the leading keyword child ("class"/"struct"/"enum"/"extension"/"actor") disambiguates
 # at the source level but all map to "class" here for uniform treatment.
-# Attributes (@discardableResult etc.) live inside a modifiers child node rather
-# than as preceding siblings, so decorator extraction is not supported in this spec.
+# Attributes (@discardableResult, @objc, etc.) live inside a modifiers child node;
+# _extract_decorators has a Swift-specific branch that handles this correctly.
 SWIFT_SPEC = LanguageSpec(
     ts_language="swift",
     symbol_node_types={

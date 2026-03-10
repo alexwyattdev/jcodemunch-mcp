@@ -273,10 +273,8 @@ def _extract_symbol(
     # symbol itself gets a unique ID that won't collide with `class Base {}` or
     # other `extension Base {}` blocks in the same file.
     if spec.ts_language == "swift" and node.type == "class_declaration" and not parent_symbol:
-        for child in node.children:
-            if not child.is_named and source_bytes[child.start_byte:child.end_byte] == b"extension":
-                qualified_name = f"{qualified_name}+extension:{node.start_point[0] + 1}"
-                break
+        if _is_swift_extension(node, source_bytes):
+            qualified_name = f"{qualified_name}+extension:{node.start_point[0] + 1}"
 
     signature_node = node
     if language == "cpp":
@@ -327,6 +325,18 @@ def _extract_symbol(
     )
     
     return symbol
+
+
+def _is_swift_extension(node, source_bytes: bytes) -> bool:
+    """Return True if *node* is a Swift extension declaration.
+
+    tree-sitter-swift represents extensions as ``class_declaration`` nodes
+    whose first unnamed child keyword is ``extension``.
+    """
+    for child in node.children:
+        if not child.is_named:
+            return source_bytes[child.start_byte:child.end_byte] == b"extension"
+    return False
 
 
 def _extract_name(node, spec: LanguageSpec, source_bytes: bytes) -> Optional[str]:
@@ -401,14 +411,12 @@ def _extract_name(node, spec: LanguageSpec, source_bytes: bytes) -> Optional[str
         if node.type == "subscript_declaration":
             return "subscript"
         if node.type == "class_declaration":
-            # Detect extension: look for 'extension' keyword among unnamed children
-            for child in node.children:
-                if not child.is_named and source_bytes[child.start_byte:child.end_byte] == b"extension":
-                    # Extended type name lives in user_type child
-                    for c in node.children:
-                        if c.type == "user_type":
-                            return source_bytes[c.start_byte:c.end_byte].decode("utf-8")
-                    return None
+            if _is_swift_extension(node, source_bytes):
+                # Extended type name lives in the user_type child
+                for c in node.children:
+                    if c.type == "user_type":
+                        return source_bytes[c.start_byte:c.end_byte].decode("utf-8")
+                return None
             # class / struct / enum / actor: fall through to name_fields lookup
         # All other Swift nodes (function_declaration, protocol_declaration, etc.)
         # fall through to name_fields lookup below
@@ -1058,7 +1066,7 @@ def _extract_constant(
         if not (name.isupper() or (len(name) > 1 and name[0].isupper() and "_" in name)):
             return None
 
-        # Qualify with container name for static constants inside types
+        # Qualify with container name for let constants found in type bodies
         qualified_name = name
         if node.parent is not None and node.parent.type in ("class_body", "enum_class_body"):
             grandparent = node.parent.parent

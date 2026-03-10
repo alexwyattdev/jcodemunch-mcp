@@ -454,6 +454,41 @@ def test_enum_companion_constant_indexed():
     assert "DEFAULT_DIRECTION" in all_names(ENUM)
 
 
+def test_enum_companion_constant_qualified_with_outer_class():
+    """Constant in an enum companion object must be qualified with the enum class name."""
+    syms = {s.qualified_name: s for s in parse_file(ENUM, "Test.kt", "kotlin")}
+    assert any("Direction" in qn and "DEFAULT_DIRECTION" in qn for qn in syms), (
+        f"Expected Direction.Companion.DEFAULT_DIRECTION in qualified names, got: {list(syms)}"
+    )
+
+
+COLLISION = """\
+class ClassA {
+    companion object {
+        const val TAG = "ClassA"
+    }
+}
+
+class ClassB {
+    companion object {
+        const val TAG = "ClassB"
+    }
+}
+"""
+
+
+def test_companion_constant_collision_produces_distinct_ids():
+    """Two classes with the same companion constant name must get distinct IDs."""
+    syms = parse_file(COLLISION, "Test.kt", "kotlin")
+    constants = [s for s in syms if s.kind == "constant" and s.name == "TAG"]
+    assert len(constants) == 2, f"Expected 2 TAG constants, got {len(constants)}"
+    ids = {s.id for s in constants}
+    assert len(ids) == 2, f"TAG constants share the same ID: {ids}"
+    qnames = {s.qualified_name for s in constants}
+    assert "ClassA.Companion.TAG" in qnames, f"Missing ClassA.Companion.TAG in {qnames}"
+    assert "ClassB.Companion.TAG" in qnames, f"Missing ClassB.Companion.TAG in {qnames}"
+
+
 # ---------------------------------------------------------------------------
 # 14. Annotations on declarations
 # ---------------------------------------------------------------------------

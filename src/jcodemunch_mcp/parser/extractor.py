@@ -931,6 +931,17 @@ def _extract_constant(
         if container_owner is not None and container_owner.type in ("companion_object", "object_declaration"):
             container_name = _extract_name(container_owner, spec, source_bytes)
             qualified_name = f"{container_name}.{name}" if container_name else name
+            # If the companion/object is nested inside a class body, further
+            # qualify with the nearest enclosing class/object name so that
+            # anonymous companions like `companion object { const val TAG }`
+            # become `OuterClass.Companion.TAG` instead of just `Companion.TAG`.
+            parent_node = container_owner.parent
+            if parent_node is not None and parent_node.type == "class_body":
+                outer_owner = parent_node.parent
+                if outer_owner is not None and outer_owner.type in ("class_declaration", "object_declaration"):
+                    outer_name = _extract_name(outer_owner, spec, source_bytes)
+                    if outer_name:
+                        qualified_name = f"{outer_name}.{qualified_name}"
         else:
             qualified_name = name
         sig = source_bytes[node.start_byte:node.end_byte].decode("utf-8").strip()

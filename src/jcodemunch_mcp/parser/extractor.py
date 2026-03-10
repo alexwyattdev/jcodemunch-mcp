@@ -931,6 +931,19 @@ def _extract_constant(
         if container_owner is not None and container_owner.type in ("companion_object", "object_declaration"):
             container_name = _extract_name(container_owner, spec, source_bytes)
             qualified_name = f"{container_name}.{name}" if container_name else name
+            # Prepend the full enclosing class chain so that deeply nested
+            # companions produce unique IDs (e.g. A.Inner.Companion.TAG instead
+            # of just Inner.Companion.TAG, which would collide with B.Inner.Companion.TAG).
+            prefixes: list[str] = []
+            ancestor = container_owner.parent
+            while ancestor is not None:
+                if ancestor.type in ("class_declaration", "object_declaration"):
+                    outer_name = _extract_name(ancestor, spec, source_bytes)
+                    if outer_name:
+                        prefixes.append(outer_name)
+                ancestor = ancestor.parent
+            for prefix in prefixes:
+                qualified_name = f"{prefix}.{qualified_name}"
         else:
             qualified_name = name
         sig = source_bytes[node.start_byte:node.end_byte].decode("utf-8").strip()

@@ -547,6 +547,21 @@ def process(x: str) -> str:
             "Stale parent pointer found — parent should have been updated to the renamed ID"
         )
 
+        # Each child should point to the correct renamed container (not both to the same one).
+        # Symbols are ordered [container_a, child_a, container_b, child_b], so:
+        #   child_a follows container_a → parent should be Box#class~1
+        #   child_b follows container_b → parent should be Box#class~2
+        methods = {s.qualified_name: s for s in result if s.kind == "method"}
+        assert methods["Box.method_a"].parent == "f.py::Box#class~1", (
+            f"method_a should point to ~1, got {methods['Box.method_a'].parent}"
+        )
+        assert methods["Box.method_b"].parent == "f.py::Box#class~2", (
+            f"method_b should point to ~2, got {methods['Box.method_b'].parent}"
+        )
+        assert methods["Box.method_a"].parent != methods["Box.method_b"].parent, (
+            "method_a and method_b must not both point to the same renamed container"
+        )
+
 
 # ===========================================================================
 # 3. Content Hashing

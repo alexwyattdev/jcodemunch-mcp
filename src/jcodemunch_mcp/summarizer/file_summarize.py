@@ -15,19 +15,29 @@ def _heuristic_summary(file_path: str, symbols: list[Symbol]) -> str:
 
     parts = []
     if classes:
-        # Deduplicate by name so base class + its extensions only produce one
-        # summary line.  Collect all container IDs per name so that methods
-        # parented to any container (base or extension) are counted correctly.
-        seen_names: set[str] = set()
+        # Deduplicate classes by a stable key derived from qualified_name.
+        # For Swift-style extensions whose qualified_name is suffixed with
+        # "+extension:<line>" (e.g. "Base+extension:7"), normalize to the base
+        # type name so the base class and all its extensions are grouped under
+        # one summary line and method counts are accumulated across all of them.
+        # For all other languages, qualified_name avoids merging unrelated
+        # classes that happen to share the same short name.
+        seen_keys: set[str] = set()
         unique_classes = []
         class_container_ids: dict[str, set[str]] = {}
         for cls in classes:
-            class_container_ids.setdefault(cls.name, set()).add(cls.id)
-            if cls.name not in seen_names:
-                seen_names.add(cls.name)
-                unique_classes.append(cls)
-        for cls in unique_classes[:2]:
-            container_ids = class_container_ids[cls.name]
+            qname = cls.qualified_name or cls.name
+            # Normalize Swift extension qualified names to the base type.
+            if "+extension:" in qname:
+                class_key = qname.split("+extension:", 1)[0]
+            else:
+                class_key = qname
+            class_container_ids.setdefault(class_key, set()).add(cls.id)
+            if class_key not in seen_keys:
+                seen_keys.add(class_key)
+                unique_classes.append((class_key, cls))
+        for class_key, cls in unique_classes[:2]:
+            container_ids = class_container_ids[class_key]
             method_count = sum(1 for s in symbols if s.kind == "method" and s.parent in container_ids)
             parts.append(f"Defines {cls.name} class ({method_count} methods)")
     if functions:

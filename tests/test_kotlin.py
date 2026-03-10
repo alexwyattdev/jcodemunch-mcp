@@ -457,7 +457,7 @@ def test_enum_companion_constant_indexed():
 def test_enum_companion_constant_qualified_with_outer_class():
     """Constant in an enum companion object must be qualified with the enum class name."""
     syms = {s.qualified_name: s for s in parse_file(ENUM, "Test.kt", "kotlin")}
-    assert any("Direction" in qn and "DEFAULT_DIRECTION" in qn for qn in syms), (
+    assert "Direction.Companion.DEFAULT_DIRECTION" in syms, (
         f"Expected Direction.Companion.DEFAULT_DIRECTION in qualified names, got: {list(syms)}"
     )
 

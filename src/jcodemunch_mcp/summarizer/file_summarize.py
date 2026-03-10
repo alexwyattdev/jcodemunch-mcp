@@ -15,19 +15,24 @@ def _heuristic_summary(file_path: str, symbols: list[Symbol]) -> str:
 
     parts = []
     if classes:
-        # Deduplicate by name so base class + its extensions only produce one
-        # summary line.  Collect all container IDs per name so that methods
-        # parented to any container (base or extension) are counted correctly.
-        seen_names: set[str] = set()
-        unique_classes = []
+        # Deduplicate by a qualified key so distinct classes that share the
+        # same short name (e.g., in different namespaces) are not merged.
+        # For Swift extensions, normalize by stripping the "+extension:<line>"
+        # suffix so that a base type and its extensions are grouped together
+        # under a single summary line.
+        seen_keys: set[str] = set()
+        unique_classes: list[tuple[str, Symbol]] = []
         class_container_ids: dict[str, set[str]] = {}
         for cls in classes:
-            class_container_ids.setdefault(cls.name, set()).add(cls.id)
-            if cls.name not in seen_names:
-                seen_names.add(cls.name)
-                unique_classes.append(cls)
-        for cls in unique_classes[:2]:
-            container_ids = class_container_ids[cls.name]
+            class_key = cls.qualified_name if cls.qualified_name else cls.name
+            if "+extension:" in class_key:
+                class_key = class_key.split("+extension:", 1)[0]
+            class_container_ids.setdefault(class_key, set()).add(cls.id)
+            if class_key not in seen_keys:
+                seen_keys.add(class_key)
+                unique_classes.append((class_key, cls))
+        for class_key, cls in unique_classes[:2]:
+            container_ids = class_container_ids[class_key]
             method_count = sum(1 for s in symbols if s.kind == "method" and s.parent in container_ids)
             parts.append(f"Defines {cls.name} class ({method_count} methods)")
     if functions:

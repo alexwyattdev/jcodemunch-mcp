@@ -547,6 +547,22 @@ def process(x: str) -> str:
             "Stale parent pointer found — parent should have been updated to the renamed ID"
         )
 
+        # Each child should be re-parented to the correct (distinct) container —
+        # method_a precedes container_b so it belongs to ~1, method_b follows
+        # container_b so it belongs to ~2.
+        methods = {s.name: s for s in result if s.kind == "method"}
+        assert {"Box.method_a", "Box.method_b"} <= set(methods.keys())
+
+        parent_a = methods["Box.method_a"].parent
+        parent_b = methods["Box.method_b"].parent
+
+        assert parent_a in container_ids, f"method_a parent {parent_a!r} not a valid container ID"
+        assert parent_b in container_ids, f"method_b parent {parent_b!r} not a valid container ID"
+        assert parent_a != parent_b, (
+            "method_a and method_b were both attached to the same renamed container; "
+            "they should be re-parented to distinct Box#class~N IDs"
+        )
+
 
 # ===========================================================================
 # 3. Content Hashing
